@@ -1,6 +1,6 @@
 import os
 import subprocess
-from aioflask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file
 import aiofiles
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -26,7 +26,7 @@ def index():
     return 'Welcome to the Video+Audio Merger and Audio Extractor bot!'
 
 @app.route('/merge', methods=['POST'])
-async def merge():
+def merge():
     video_file = request.files.get('video')
     audio_file = request.files.get('audio')
 
@@ -37,7 +37,7 @@ async def merge():
     audio_filename = 'input_audio.mp3'
     output_filename = 'output_merged.mp4'
 
-    try:
+    async def merge_files():
         async with aiofiles.open(video_filename, 'wb') as v_out, aiofiles.open(audio_filename, 'wb') as a_out:
             await v_out.write(await video_file.read())
             await a_out.write(await audio_file.read())
@@ -59,14 +59,16 @@ async def merge():
             return await send_file(output_filename, as_attachment=True)
         else:
             return jsonify({'error': stderr.decode()}), 500
-    finally:
-        os.remove(video_filename)
-        os.remove(audio_filename)
-        if os.path.exists(output_filename):
-            os.remove(output_filename)
+        finally:
+            os.remove(video_filename)
+            os.remove(audio_filename)
+            if os.path.exists(output_filename):
+                os.remove(output_filename)
+
+    return asyncio.run(merge_files())
 
 @app.route('/extract', methods=['POST'])
-async def extract():
+def extract():
     video_file = request.files.get('video')
 
     if not video_file:
@@ -75,7 +77,7 @@ async def extract():
     video_filename = 'input_video.mp4'
     output_audio_filename = 'output_audio.mp3'
 
-    try:
+    async def extract_audio():
         async with aiofiles.open(video_filename, 'wb') as v_out:
             await v_out.write(await video_file.read())
 
@@ -94,13 +96,15 @@ async def extract():
             return await send_file(output_audio_filename, as_attachment=True)
         else:
             return jsonify({'error': stderr.decode()}), 500
-    finally:
-        os.remove(video_filename)
-        if os.path.exists(output_audio_filename):
-            os.remove(output_audio_filename)
+        finally:
+            os.remove(video_filename)
+            if os.path.exists(output_audio_filename):
+                os.remove(output_audio_filename)
+
+    return asyncio.run(extract_audio())
 
 @app.route('/send_video', methods=['POST'])
-async def send_video():
+def send_video():
     chat_id = request.form.get('chat_id')
     video_file = request.files.get('video')
 
@@ -108,17 +112,21 @@ async def send_video():
         return jsonify({'error': 'Please provide both chat_id and video file'}), 400
 
     video_filename = 'input_video.mp4'
-    async with aiofiles.open(video_filename, 'wb') as v_out:
-        await v_out.write(await video_file.read())
 
-    async with app_pyrogram:
-        await app_pyrogram.send_video(chat_id, video_filename)
+    async def send_video_file():
+        async with aiofiles.open(video_filename, 'wb') as v_out:
+            await v_out.write(await video_file.read())
 
-    os.remove(video_filename)
-    return jsonify({'status': 'Video sent successfully!'})
+        async with app_pyrogram:
+            await app_pyrogram.send_video(chat_id, video_filename)
+
+        os.remove(video_filename)
+        return jsonify({'status': 'Video sent successfully!'})
+
+    return asyncio.run(send_video_file())
 
 @app.route('/send_audio', methods=['POST'])
-async def send_audio():
+def send_audio():
     chat_id = request.form.get('chat_id')
     audio_file = request.files.get('audio')
 
@@ -126,17 +134,21 @@ async def send_audio():
         return jsonify({'error': 'Please provide both chat_id and audio file'}), 400
 
     audio_filename = 'input_audio.mp3'
-    async with aiofiles.open(audio_filename, 'wb') as a_out:
-        await a_out.write(await audio_file.read())
 
-    async with app_pyrogram:
-        await app_pyrogram.send_audio(chat_id, audio_filename)
+    async def send_audio_file():
+        async with aiofiles.open(audio_filename, 'wb') as a_out:
+            await a_out.write(await audio_file.read())
 
-    os.remove(audio_filename)
-    return jsonify({'status': 'Audio sent successfully!'})
+        async with app_pyrogram:
+            await app_pyrogram.send_audio(chat_id, audio_filename)
+
+        os.remove(audio_filename)
+        return jsonify({'status': 'Audio sent successfully!'})
+
+    return asyncio.run(send_audio_file())
 
 @app.route('/replace_audio', methods=['POST'])
-async def replace_audio():
+def replace_audio():
     video_file = request.files.get('video')
     audio_file = request.files.get('audio')
 
@@ -147,7 +159,7 @@ async def replace_audio():
     audio_filename = 'input_audio.mp3'
     output_filename = 'output_video_with_new_audio.mp4'
 
-    try:
+    async def replace_audio_file():
         async with aiofiles.open(video_filename, 'wb') as v_out, aiofiles.open(audio_filename, 'wb') as a_out:
             await v_out.write(await video_file.read())
             await a_out.write(await audio_file.read())
@@ -170,11 +182,13 @@ async def replace_audio():
             return await send_file(output_filename, as_attachment=True)
         else:
             return jsonify({'error': stderr.decode()}), 500
-    finally:
-        os.remove(video_filename)
-        os.remove(audio_filename)
-        if os.path.exists(output_filename):
-            os.remove(output_filename)
+        finally:
+            os.remove(video_filename)
+            os.remove(audio_filename)
+            if os.path.exists(output_filename):
+                os.remove(output_filename)
+
+    return asyncio.run(replace_audio_file())
 
 @app_pyrogram.on_message(filters.command(['start']))
 async def start(client, message):
