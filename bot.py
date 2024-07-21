@@ -1,6 +1,6 @@
 import os
 import subprocess
-from Flask import request, jsonify, send_file
+from aioflask import Flask, request, jsonify, send_file
 import aiofiles
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -231,4 +231,4 @@ async def handle_audio(client, message):
 
 if __name__ == '__main__':
     app_pyrogram.start()
-    app.run
+    app.run()
