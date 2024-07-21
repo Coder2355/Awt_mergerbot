@@ -38,27 +38,28 @@ def merge():
     output_filename = 'output_merged.mp4'
 
     async def merge_files():
-        async with aiofiles.open(video_filename, 'wb') as v_out, aiofiles.open(audio_filename, 'wb') as a_out:
-            await v_out.write(await video_file.read())
-            await a_out.write(await audio_file.read())
+        try:
+            async with aiofiles.open(video_filename, 'wb') as v_out, aiofiles.open(audio_filename, 'wb') as a_out:
+                await v_out.write(await video_file.read())
+                await a_out.write(await audio_file.read())
 
-        command = [
-            'ffmpeg',
-            '-i', video_filename,
-            '-i', audio_filename,
-            '-c:v', 'copy',
-            '-c:a', 'aac',
-            '-strict', 'experimental',
-            output_filename
-        ]
+            command = [
+                'ffmpeg',
+                '-i', video_filename,
+                '-i', audio_filename,
+                '-c:v', 'copy',
+                '-c:a', 'aac',
+                '-strict', 'experimental',
+                output_filename
+            ]
 
-        loop = asyncio.get_event_loop()
-        returncode, stdout, stderr = await loop.run_in_executor(executor, run_ffmpeg_command, command)
+            loop = asyncio.get_event_loop()
+            returncode, stdout, stderr = await loop.run_in_executor(executor, run_ffmpeg_command, command)
 
-        if returncode == 0:
-            return await send_file(output_filename, as_attachment=True)
-        else:
-            return jsonify({'error': stderr.decode()}), 500
+            if returncode == 0:
+                return await send_file(output_filename, as_attachment=True)
+            else:
+                return jsonify({'error': stderr.decode()}), 500
         finally:
             os.remove(video_filename)
             os.remove(audio_filename)
@@ -78,24 +79,25 @@ def extract():
     output_audio_filename = 'output_audio.mp3'
 
     async def extract_audio():
-        async with aiofiles.open(video_filename, 'wb') as v_out:
-            await v_out.write(await video_file.read())
+        try:
+            async with aiofiles.open(video_filename, 'wb') as v_out:
+                await v_out.write(await video_file.read())
 
-        command = [
-            'ffmpeg',
-            '-i', video_filename,
-            '-q:a', '0',
-            '-map', 'a',
-            output_audio_filename
-        ]
+            command = [
+                'ffmpeg',
+                '-i', video_filename,
+                '-q:a', '0',
+                '-map', 'a',
+                output_audio_filename
+            ]
 
-        loop = asyncio.get_event_loop()
-        returncode, stdout, stderr = await loop.run_in_executor(executor, run_ffmpeg_command, command)
+            loop = asyncio.get_event_loop()
+            returncode, stdout, stderr = await loop.run_in_executor(executor, run_ffmpeg_command, command)
 
-        if returncode == 0:
-            return await send_file(output_audio_filename, as_attachment=True)
-        else:
-            return jsonify({'error': stderr.decode()}), 500
+            if returncode == 0:
+                return await send_file(output_audio_filename, as_attachment=True)
+            else:
+                return jsonify({'error': stderr.decode()}), 500
         finally:
             os.remove(video_filename)
             if os.path.exists(output_audio_filename):
@@ -114,13 +116,15 @@ def send_video():
     video_filename = 'input_video.mp4'
 
     async def send_video_file():
-        async with aiofiles.open(video_filename, 'wb') as v_out:
-            await v_out.write(await video_file.read())
+        try:
+            async with aiofiles.open(video_filename, 'wb') as v_out:
+                await v_out.write(await video_file.read())
 
-        async with app_pyrogram:
-            await app_pyrogram.send_video(chat_id, video_filename)
+            async with app_pyrogram:
+                await app_pyrogram.send_video(chat_id, video_filename)
 
-        os.remove(video_filename)
+        finally:
+            os.remove(video_filename)
         return jsonify({'status': 'Video sent successfully!'})
 
     return asyncio.run(send_video_file())
@@ -136,13 +140,15 @@ def send_audio():
     audio_filename = 'input_audio.mp3'
 
     async def send_audio_file():
-        async with aiofiles.open(audio_filename, 'wb') as a_out:
-            await a_out.write(await audio_file.read())
+        try:
+            async with aiofiles.open(audio_filename, 'wb') as a_out:
+                await a_out.write(await audio_file.read())
 
-        async with app_pyrogram:
-            await app_pyrogram.send_audio(chat_id, audio_filename)
+            async with app_pyrogram:
+                await app_pyrogram.send_audio(chat_id, audio_filename)
 
-        os.remove(audio_filename)
+        finally:
+            os.remove(audio_filename)
         return jsonify({'status': 'Audio sent successfully!'})
 
     return asyncio.run(send_audio_file())
@@ -160,28 +166,29 @@ def replace_audio():
     output_filename = 'output_video_with_new_audio.mp4'
 
     async def replace_audio_file():
-        async with aiofiles.open(video_filename, 'wb') as v_out, aiofiles.open(audio_filename, 'wb') as a_out:
-            await v_out.write(await video_file.read())
-            await a_out.write(await audio_file.read())
+        try:
+            async with aiofiles.open(video_filename, 'wb') as v_out, aiofiles.open(audio_filename, 'wb') as a_out:
+                await v_out.write(await video_file.read())
+                await a_out.write(await audio_file.read())
 
-        command = [
-            'ffmpeg',
-            '-i', video_filename,
-            '-i', audio_filename,
-            '-c:v', 'copy',
-            '-c:a', 'aac',
-            '-map', '0:v:0',
-            '-map', '1:a:0',
-            output_filename
-        ]
+            command = [
+                'ffmpeg',
+                '-i', video_filename,
+                '-i', audio_filename,
+                '-c:v', 'copy',
+                '-c:a', 'aac',
+                '-map', '0:v:0',
+                '-map', '1:a:0',
+                output_filename
+            ]
 
-        loop = asyncio.get_event_loop()
-        returncode, stdout, stderr = await loop.run_in_executor(executor, run_ffmpeg_command, command)
+            loop = asyncio.get_event_loop()
+            returncode, stdout, stderr = await loop.run_in_executor(executor, run_ffmpeg_command, command)
 
-        if returncode == 0:
-            return await send_file(output_filename, as_attachment=True)
-        else:
-            return jsonify({'error': stderr.decode()}), 500
+            if returncode == 0:
+                return await send_file(output_filename, as_attachment=True)
+            else:
+                return jsonify({'error': stderr.decode()}), 500
         finally:
             os.remove(video_filename)
             os.remove(audio_filename)
