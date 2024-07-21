@@ -251,5 +251,4 @@ async def handle_audio(client, message):
         os.remove(output_filename)
 
 if __name__ == '__main__':
-    app_pyrogram.start()
-    app.run(host='0.0.0.0', port=8020)
+    app.run()
