@@ -60,8 +60,7 @@ async def merge():
     if returncode == 0:
         return await send_file(output_filename, as_attachment=True)
     else:
-        return jsonify({'error': stderr.decode()}), 500
-    finally
+        return jsonify({'error': stderr.decode()}), 500 finally:
         os.remove(video_filename)
         os.remove(audio_filename)
         if os.path.exists(output_filename):
