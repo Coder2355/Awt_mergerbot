@@ -3,3 +3,4 @@ aioflask
 aiofiles
 pyrogram
 tgcrypto
+gunicorn
