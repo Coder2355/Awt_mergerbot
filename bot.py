@@ -76,9 +76,5 @@ def download_audio(filename):
         return send_file(file_path)
     return "File not found", 404
 
-def run_flask():
-    flask_app.run(host=config.FLASK_HOST, port=config.FLASK_PORT)
-
 if __name__ == "__main__":
-    Thread(target=run_flask).start()
     app.run()
