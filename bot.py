@@ -2,11 +2,10 @@ import os
 import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from flask import Flask, send_file, abort
 import config
-from threading import Thread
+from flask import Flask, send_file
 
-app = Client("media_extractor_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
+app = Client("audio_extractor_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
 flask_app = Flask(__name__)
 
 DOWNLOAD_DIR = "downloads"
@@ -14,62 +13,48 @@ OUTPUT_DIR = "output"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def get_audio_stream_count(video_path: str) -> int:
-    """Get the number of audio streams in a video."""
+def extract_audio(video_path: str):
+    """Extract multiple audio tracks from a video using FFmpeg."""
+    # Get the number of audio streams
     command = [
-        'ffprobe',
-        '-v', 'error',
-        '-select_streams', 'a',
-        '-show_entries', 'stream=index',
-        '-of', 'csv=p=0',
-        video_path
+        'ffmpeg',
+        '-i', video_path,
+        '-map', 'a',  # Select all audio streams
+        '-c:a', 'mp3',  # Use MP3 codec
+        '-f', 'segment',
+        '-segment_list', 'audio_list.m3u8',  # Create a playlist of audio files
+        '-segment_time', '10',  # Segment duration (adjust as needed)
+        os.path.join(OUTPUT_DIR, 'audio_%03d.mp3')  # Output file pattern
     ]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return len(result.stdout.decode().strip().split('\n'))
-
-def extract_audio(video_path: str, audio_path_template: str):
-    """Extract all audio streams from video using FFmpeg."""
-    stream_count = get_audio_stream_count(video_path)
-    for i in range(stream_count):
-        audio_path = audio_path_template.format(i)
-        command = [
-            'ffmpeg',
-            '-i', video_path,
-            '-map', f'0:a:{i}',  # Map audio stream i
-            '-acodec', 'mp3',
-            '-q:a', '2',
-            audio_path
-        ]
-        try:
-            subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"FFmpeg error: {e.stderr.decode()}")
-            raise
+    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    # Rename audio files according to the segment list
+    with open('audio_list.m3u8', 'r') as f:
+        lines = f.readlines()
+    
+    for line in lines:
+        if line.strip().endswith('.mp3'):
+            old_name = line.strip()
+            new_name = os.path.join(OUTPUT_DIR, f"{old_name}")
+            os.rename(old_name, new_name)
+    
+    os.remove('audio_list.m3u8')
 
 @app.on_message(filters.video)
 async def handle_video(client: Client, message: Message):
     """Handle incoming video messages."""
-    file_name = message.video.file_name
-    video_path = os.path.join(DOWNLOAD_DIR, file_name)
-    audio_path_template = os.path.join(OUTPUT_DIR, f"{os.path.splitext(file_name)[0]}_audio_{{}}.mp3")
+    video_file = await message.download(file_name=os.path.join(DOWNLOAD_DIR, message.video.file_name))
     
-    try:
-        await message.download(file_name=video_path)
-        extract_audio(video_path, audio_path_template)
-        
-        # Send all extracted audio files
-        for file in os.listdir(OUTPUT_DIR):
-            if file.startswith(os.path.splitext(file_name)[0]) and file.endswith('.mp3'):
-                await message.reply_document(os.path.join(OUTPUT_DIR, file))
-    except Exception as e:
-        print(f"Error processing video: {e}")
-        await message.reply("An error occurred while processing your video.")
-    finally:
-        if os.path.exists(video_path):
-            os.remove(video_path)
-        for file in os.listdir(OUTPUT_DIR):
-            if file.startswith(os.path.splitext(file_name)[0]) and file.endswith('.mp3'):
-                os.remove(os.path.join(OUTPUT_DIR, file))
+    extract_audio(video_file)
+    
+    # Reply with all audio files
+    for file_name in os.listdir(OUTPUT_DIR):
+        if file_name.endswith('.mp3'):
+            await message.reply_document(os.path.join(OUTPUT_DIR, file_name))
+    
+    os.remove(video_file)
+    for file_name in os.listdir(OUTPUT_DIR):
+        os.remove(os.path.join(OUTPUT_DIR, file_name))
 
 @flask_app.route('/status')
 def status():
@@ -80,7 +65,7 @@ def download_audio(filename):
     file_path = os.path.join(OUTPUT_DIR, filename)
     if os.path.exists(file_path):
         return send_file(file_path)
-    abort(404, "File not found")
+    return "File not found", 404
 
 if __name__ == "__main__":
     app.run()
