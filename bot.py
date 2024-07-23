@@ -1,96 +1,91 @@
 import os
 import subprocess
+from flask import Flask, request, jsonify
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from threading import Thread
-from flask import Flask, send_file
-import config  # Import your config module
+import config
 import asyncio
+import threading
 
+# Initialize the bot with configuration from config.py
 app = Client("audio_extractor_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
-flask_app = Flask(__name__)
 
-os.makedirs(config.DOWNLOAD_DIR, exist_ok=True)
-os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+# Initialize Flask web server
+web_app = Flask(__name__)
 
-def extract_audio(video_path: str, audio_path: str):
-    """Extract audio from video using FFmpeg."""
-    command = [
-        'ffmpeg',
-        '-i', video_path,
-        '-vn',  # No video
-        '-acodec', 'mp3',  # Use MP3 codec
-        '-q:a', '2',  # Variable bitrate quality level
-        audio_path
-    ]
-    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+# Ensure the download directory exists
+os.makedirs(config.DOWNLOAD_PATH, exist_ok=True)
 
-def remove_subtitles(video_path: str, output_path: str):
-    """Remove subtitles from video using FFmpeg."""
-    command = [
-        'ffmpeg',
-        '-i', video_path,
-        '-c', 'copy',  # Copy video and audio streams
-        '-sn',  # Remove subtitles
-        output_path
-    ]
-    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+# Progress tracking callback
+async def progress(current, total, message_id, bot, chat_id):
+    percent = (current / total) * 100
+    await bot.edit_message_text(chat_id, message_id, f"Download Progress: {percent:.2f}%")
 
-@app.on_message(filters.command("start"))
-async def start_command(client: Client, message: Message):
-    """Handle /start command."""
-    await message.reply("Welcome! Send me a video with the /extract_audio command to extract audio or /remove_subtitles to remove subtitles.")
+@app.on_message(filters.command("start") & filters.private)
+async def start(client, message: Message):
+    await message.reply_text("Hi! Send me a video file and I'll extract the audio for you. If you want to remove subtitles as well, use the /remove_subs command followed by the video file.")
 
-@app.on_message(filters.command("help"))
-async def help_command(client: Client, message: Message):
-    """Handle /help command."""
-    await message.reply("To extract audio from a video, use the /extract_audio command and send the video file.\n"
-                       "To remove subtitles, use the /remove_subtitles command and send the video file.")
+@app.on_message(filters.video & filters.private & ~filters.command("remove_subs"))
+async def extract_audio(client, message: Message):
+    video = message.video
+    video_file_path = os.path.join(config.DOWNLOAD_PATH, "video.mp4")
+    audio_file_path = os.path.splitext(video_file_path)[0] + ".mp3"
 
-@app.on_message(filters.command("extract_audio") & filters.video)
-async def extract_audio_command(client: Client, message: Message):
-    """Handle /extract_audio command."""
-    await message.reply("Downloading your video...")
+    # Download video asynchronously
+    await client.download_media(message, video_file_path, progress=progress)
 
-    video_file = await message.download(file_name=os.path.join(config.DOWNLOAD_DIR, message.video.file_name))
-    await message.reply("Extracting audio...")
+    # Extract audio using FFmpeg
+    command = f"ffmpeg -i {video_file_path} -q:a 0 -map a {audio_file_path}"
+    subprocess.run(command, shell=True, check=True)
 
-    audio_file = os.path.join(config.OUTPUT_DIR, f"{os.path.splitext(message.video.file_name)[0]}.mp3")
-    
-    extract_audio(video_file, audio_file)
-    
-    await message.reply_document(audio_file)
-    
-    os.remove(video_file)
-    os.remove(audio_file)
+    # Send the audio file with progress
+    async def progress_upload(current, total):
+        percent = (current / total) * 100
+        await client.send_message(message.chat.id, f"Upload Progress: {percent:.2f}%")
 
-@app.on_message(filters.command("remove_subtitles") & filters.video)
-async def remove_subtitles_command(client: Client, message: Message):
-    """Handle /remove_subtitles command."""
-    await message.reply("Downloading your video...")
+    await client.send_audio(message.chat.id, audio_file_path, progress=progress_upload)
 
-    video_file = await message.download(file_name=os.path.join(config.DOWNLOAD_DIR, message.video.file_name))
-    await message.reply("Removing subtitles...")
+    # Clean up
+    os.remove(video_file_path)
+    os.remove(audio_file_path)
 
-    output_file = os.path.join(config.OUTPUT_DIR, f"{os.path.splitext(message.video.file_name)[0]}_no_subs.mp4")
-    
-    remove_subtitles(video_file, output_file)
-    
-    await message.reply_document(output_file)
-    
-    os.remove(video_file)
-    os.remove(output_file)
+@app.on_message(filters.video & filters.private & filters.command("remove_subs"))
+async def remove_subs_and_extract_audio(client, message: Message):
+    video = message.video
+    video_file_path = os.path.join(config.DOWNLOAD_PATH, "video.mp4")
+    video_no_subs_file_path = os.path.splitext(video_file_path)[0] + "_nosubs.mp4"
+    audio_file_path = os.path.splitext(video_file_path)[0] + ".mp3"
 
-@flask_app.route('/status')
+    # Download video asynchronously
+    await client.download_media(message, video_file_path, progress=progress)
+
+    # Remove subtitles and extract audio using FFmpeg
+    command_remove_subs = f"ffmpeg -i {video_file_path} -map 0:v -map 0:a -c copy -an {video_no_subs_file_path}"
+    subprocess.run(command_remove_subs, shell=True, check=True)
+
+    command_extract_audio = f"ffmpeg -i {video_no_subs_file_path} -q:a 0 -map a {audio_file_path}"
+    subprocess.run(command_extract_audio, shell=True, check=True)
+
+    # Send the audio file with progress
+    async def progress_upload(current, total):
+        percent = (current / total) * 100
+        await client.send_message(message.chat.id, f"Upload Progress: {percent:.2f}%")
+
+    await client.send_audio(message.chat.id, audio_file_path, progress=progress_upload)
+
+    # Clean up
+    os.remove(video_file_path)
+    os.remove(video_no_subs_file_path)
+    os.remove(audio_file_path)
+
+# Web server routes
+@web_app.route('/')
+def index():
+    return 'Audio Extractor Bot is running!'
+
+@web_app.route('/status', methods=['GET'])
 def status():
-    return "Bot is running"
-
-@flask_app.route('/download_audio/<filename>', methods=['GET'])
-def download_audio(filename):
-    file_path = os.path.join(config.OUTPUT_DIR, filename)
-    if os.path.exists(file_path):
-        return send_file(file_path)
-    return "File not found", 404
+    return jsonify({'status': 'running'})
 
 if __name__ == "__main__":
     app.run()
