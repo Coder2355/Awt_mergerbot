@@ -1,113 +1,62 @@
 import os
-import ffmpeg
-from flask import Flask
+import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from datetime import datetime
-import pytz
-import asyncio
+from threading import Thread
+from flask import Flask, send_file
 
-# Configuration
-from config import API_ID, API_HASH, BOT_TOKEN
+# Replace with your actual API ID, API hash, and bot token
+api_id = 'YOUR_API_ID'
+api_hash = 'YOUR_API_HASH'
+bot_token = 'YOUR_BOT_TOKEN'
 
-app = Flask(__name__)
-bot = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("audio_extractor_bot", api_id=api_id, api_hash=api_hash, bot_token=bot_token)
+flask_app = Flask(__name__)
 
-# Define paths to store video and audio files temporarily
-VIDEO_FILE = "video.mp4"
-AUDIO_FILE = "audio.mp3"
-EXTRACTED_AUDIO_FILE = "extracted_audio.mp3"
-SUBTITLES_FILE = "subtitles.srt"
-OUTPUT_FILE = "output.mp4"
+DOWNLOAD_DIR = "downloads"
+OUTPUT_DIR = "output"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-@bot.on_message(filters.command("start"))
-async def start(client, message: Message):
-    await message.reply_text(
-        'Hi! Use the following commands:\n'
-        '/merge - Send a video and then an audio file to merge them.\n'
-        '/extract_audio - Send a video to extract its audio.\n'
-        '/extract_subtitles - Send a video to extract subtitles.'
-    )
+def extract_audio(video_path: str, audio_path: str):
+    """Extract audio from video using FFmpeg."""
+    command = [
+        'ffmpeg',
+        '-i', video_path,
+        '-vn',  # No video
+        '-acodec', 'mp3',  # Use MP3 codec
+        '-q:a', '2',  # Variable bitrate quality level
+        audio_path
+    ]
+    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-@bot.on_message(filters.command("merge"))
-async def merge_command(client, message: Message):
-    await message.reply_text('Send me a video file and then an audio file to merge them.')
+@app.on_message(filters.video)
+async def handle_video(client: Client, message: Message):
+    """Handle incoming video messages."""
+    video_file = await message.download(file_name=os.path.join(DOWNLOAD_DIR, message.video.file_name))
+    audio_file = os.path.join(OUTPUT_DIR, f"{os.path.splitext(message.video.file_name)[0]}.mp3")
+    
+    extract_audio(video_file, audio_file)
+    
+    await message.reply_document(audio_file)
+    
+    os.remove(video_file)
+    os.remove(audio_file)
 
-@bot.on_message(filters.command("extract_audio"))
-async def extract_audio_command(client, message: Message):
-    await message.reply_text('Send me a video file to extract audio.')
+@flask_app.route('/status')
+def status():
+    return "Bot is running"
 
-@bot.on_message(filters.command("extract_subtitles"))
-async def extract_subtitles_command(client, message: Message):
-    await message.reply_text('Send me a video file to extract subtitles.')
+@flask_app.route('/download_audio/<filename>', methods=['GET'])
+def download_audio(filename):
+    file_path = os.path.join(OUTPUT_DIR, filename)
+    if os.path.exists(file_path):
+        return send_file(file_path)
+    return "File not found", 404
 
-@bot.on_message(filters.video)
-async def handle_video(client, message: Message):
-    await message.download(file_name=VIDEO_FILE)
-    await message.reply_text('Video received! Now send me an audio file to merge or use /extract_audio or /extract_subtitles.')
+def run_flask():
+    flask_app.run(host='0.0.0.0', port=5000)
 
-@bot.on_message(filters.audio)
-async def handle_audio(client, message: Message):
-    await message.download(file_name=AUDIO_FILE)
-    await message.reply_text('Audio received! Merging now...')
-    await merge_video_audio()
-
-@bot.on_message(filters.document)
-async def handle_document(client, message: Message):
-    mime_type = message.document.mime_type
-    if mime_type.startswith("video/"):
-        await message.download(file_name=VIDEO_FILE)
-        await message.reply_text('Video received! Now send me an audio file to merge or use /extract_audio or /extract_subtitles.')
-    elif mime_type.startswith("audio/"):
-        await message.download(file_name=AUDIO_FILE)
-        await message.reply_text('Audio received! Merging now...')
-        await merge_video_audio()
-
-async def merge_video_audio():
-    try:
-        # Merge video and audio into a single output file
-        ffmpeg.input(VIDEO_FILE).output(AUDIO_FILE, OUTPUT_FILE, vcodec='copy', acodec='aac', strict='experimental').run()
-        
-        current_time = datetime.now(pytz.timezone('UTC')).strftime('%Y-%m-%d %H:%M:%S %Z')
-        await message.reply_text(f'Merging complete! Sending the merged file... ({current_time})')
-        
-        await message.reply_document(OUTPUT_FILE)
-    except ffmpeg.Error as e:
-        await message.reply_text(f'An error occurred: {e.stderr.decode()}')
-    finally:
-        cleanup_files()
-
-async def extract_audio_from_video():
-    try:
-        # Extract audio from video
-        ffmpeg.input(VIDEO_FILE).output(EXTRACTED_AUDIO_FILE).run()
-        
-        await message.reply_text('Audio extraction complete! Sending the audio file...')
-        
-        await message.reply_document(EXTRACTED_AUDIO_FILE)
-    except ffmpeg.Error as e:
-        await message.reply_text(f'An error occurred: {e.stderr.decode()}')
-    finally:
-        cleanup_files()
-
-async def extract_subtitles_from_video():
-    try:
-        # Extract subtitles from video
-        ffmpeg.input(VIDEO_FILE).output(SUBTITLES_FILE).run()
-        
-        await message.reply_text('Subtitles extraction complete! Sending the subtitles file...')
-        
-        await message.reply_document(SUBTITLES_FILE)
-    except ffmpeg.Error as e:
-        await message.reply_text(f'An error occurred: {e.stderr.decode()}')
-    finally:
-        cleanup_files()
-
-def cleanup_files():
-    for file in [VIDEO_FILE, AUDIO_FILE, EXTRACTED_AUDIO_FILE, SUBTITLES_FILE, OUTPUT_FILE]:
-        if os.path.exists(file):
-            os.remove(file)
-
-if __name__ == '__main__':
-    bot.start()
-    asyncio.get_event_loop().run_forever()
+if __name__ == "__main__":
+    Thread(target=run_flask).start()
+    app.run()
