@@ -6,12 +6,7 @@ from threading import Thread
 from config import API_ID, API_HASH, BOT_TOKEN
 from flask import Flask, send_file
 
-# Replace with your actual API ID, API hash, and bot token
-api_id = 'YOUR_API_ID'
-api_hash = 'YOUR_API_HASH'
-bot_token = 'YOUR_BOT_TOKEN'
-
-app = Client("audio_extractor_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("audio_extractor_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
 flask_app = Flask(__name__)
 
 DOWNLOAD_DIR = "downloads"
