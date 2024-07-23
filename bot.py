@@ -43,6 +43,7 @@ def extract_audio(video_path: str, output_dir: str) -> dict:
             '-map', f'{stream_index}',  # Select specific audio stream
             '-acodec', 'mp3',  # Use MP3 codec
             '-q:a', '2',  # Variable bitrate quality level
+            '-y',  # Overwrite existing files without asking
             output_audio_path
         ]
         subprocess.run(extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -51,7 +52,7 @@ def extract_audio(video_path: str, output_dir: str) -> dict:
     return track_info
 
 def get_audio_duration(audio_path: str) -> str:
-    """Get the duration of an audio file."""
+    """Get the duration of an audio file in hh:mm:ss format."""
     command = [
         'ffprobe',
         '-v', 'error',
@@ -60,7 +61,10 @@ def get_audio_duration(audio_path: str) -> str:
         audio_path
     ]
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    return result.stdout.strip()
+    duration_seconds = float(result.stdout.strip())
+    hours, remainder = divmod(int(duration_seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02}:{minutes:02}:{seconds:02}"
 
 @app.on_message(filters.video)
 async def handle_video(client: Client, message: Message):
@@ -82,16 +86,17 @@ async def handle_video(client: Client, message: Message):
     buttons = []
     for track_name, stream_index in track_info.items():
         duration = get_audio_duration(os.path.join(audio_output_dir, track_name))
-        buttons.append([InlineKeyboardButton(f"{track_name} ({duration}s)", callback_data=track_name)])
+        buttons.append([InlineKeyboardButton(f"{track_name} ({duration})", callback_data=track_name)])
 
     reply_markup = InlineKeyboardMarkup(buttons)
-    await message.reply("Select an audio track to download:", reply_markup=reply_markup)
+    reply_message = await message.reply("Select an audio track to download:", reply_markup=reply_markup)
 
     # Store the track info in user data
     app.user_data[message.from_user.id] = {
         'video_file': video_file,
         'audio_output_dir': audio_output_dir,
-        'track_info': track_info
+        'track_info': track_info,
+        'reply_message_id': reply_message.message_id
     }
 
 @app.on_callback_query()
@@ -105,16 +110,20 @@ async def handle_callback_query(client: Client, query):
         audio_path = os.path.join(user_data['audio_output_dir'], track_name)
         
         if os.path.exists(audio_path):
-            await query.message.reply_document(audio_path, caption=f"Audio: {track_name}\nDuration: {get_audio_duration(audio_path)} seconds")
+            # Send the audio file
+            reply_message = await query.message.reply_document(audio_path, caption=f"Audio: {track_name}\nDuration: {get_audio_duration(audio_path)} seconds")
+            
+            # Optionally delete the original reply message after sending the audio
+            await query.message.delete()
+
+            # Clean up temporary files
+            os.remove(user_data['video_file'])
+            for file in os.listdir(user_data['audio_output_dir']):
+                os.remove(os.path.join(user_data['audio_output_dir'], file))
+            os.rmdir(user_data['audio_output_dir'])
+            del app.user_data[user_id]
         else:
             await query.message.reply("The selected audio track is no longer available.")
-
-        # Clean up temporary files
-        os.remove(user_data['video_file'])
-        for file in os.listdir(user_data['audio_output_dir']):
-            os.remove(os.path.join(user_data['audio_output_dir'], file))
-        os.rmdir(user_data['audio_output_dir'])
-        del app.user_data[user_id]
     else:
         await query.message.reply("No video file found for this session.")
 
