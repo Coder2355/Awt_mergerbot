@@ -18,6 +18,18 @@ async def start_command(client: Client, message: Message):
     """Handle /start command."""
     await message.reply("Welcome! Use /extract_audio and reply to a video, file, or document to extract audio.")
 
+def extract_audio(video_path: str, audio_path: str):
+    """Extract audio from video using FFmpeg."""
+    command = [
+        'ffmpeg',
+        '-i', video_path,
+        '-vn',  # No video
+        '-acodec', 'mp3',  # Use MP3 codec
+        '-q:a', '2',  # Variable bitrate quality level
+        audio_path
+    ]
+    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
 @app.on_message(filters.command("extract_audio") & (filters.video | filters.document | filters.audio))
 async def extract_audio_command(client: Client, message: Message):
     """Handle /extract_audio command."""
