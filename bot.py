@@ -35,7 +35,7 @@ async def extract_audio(client, message: Message):
     await client.download_media(message, video_file_path, progress=progress)
 
     # Extract audio using FFmpeg
-    command = f"ffmpeg -i {video_file_path} -q:a 0 -map a {audio_file_path}"
+    command = f"ffmpeg -i {video_file_path} -q:a 0 -map a -y {audio_file_path}"
     subprocess.run(command, shell=True, check=True)
 
     # Send the audio file with progress
@@ -59,11 +59,12 @@ async def remove_subs_and_extract_audio(client, message: Message):
     # Download video asynchronously
     await client.download_media(message, video_file_path, progress=progress)
 
-    # Remove subtitles and extract audio using FFmpeg
-    command_remove_subs = f"ffmpeg -i {video_file_path} -map 0:v -map 0:a -c copy -an {video_no_subs_file_path}"
+    # Remove subtitles using FFmpeg
+    command_remove_subs = f"ffmpeg -i {video_file_path} -map 0:v -map 0:a -c copy -an -y {video_no_subs_file_path}"
     subprocess.run(command_remove_subs, shell=True, check=True)
 
-    command_extract_audio = f"ffmpeg -i {video_no_subs_file_path} -q:a 0 -map a {audio_file_path}"
+    # Extract audio from the video without subtitles
+    command_extract_audio = f"ffmpeg -i {video_no_subs_file_path} -q:a 0 -map a -y {audio_file_path}"
     subprocess.run(command_extract_audio, shell=True, check=True)
 
     # Send the audio file with progress
