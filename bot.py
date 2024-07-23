@@ -1,92 +1,111 @@
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-import config
-import subprocess
 import os
+import ffmpeg
+from flask import Flask, request
+from pyrogram import Client, filters
+from pyrogram.types import Message
+from datetime import datetime
+import pytz
+import asyncio
 
-@app.on_message(filters.command("start"))
-async def start(client, message):
-    keyboard = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("Send Video", callback_data="send_video")],
-            [InlineKeyboardButton("Extract Audio", callback_data="extract_audio")]
-        ]
-    )
-    await message.reply("Welcome! Choose an option below.", reply_markup=keyboard)
+# Configuration
+from config import API_ID, API_HASH, BOT_TOKEN
 
-@app.on_callback_query(filters.regex("send_video"))
-async def send_video(client, callback_query):
-    await callback_query.message.reply("Please send the video file.")
+app = Flask(__name__)
+bot = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-@app.on_callback_query(filters.regex("extract_audio"))
-async def extract_audio(client, callback_query):
-    await callback_query.message.reply("Please send the video file to extract audio.")
+# Define paths to store video and audio files temporarily
+VIDEO_FILE = "video.mp4"
+AUDIO_FILE = "audio.mp3"
+EXTRACTED_AUDIO_FILE = "extracted_audio.mp3"
+SUBTITLES_FILE = "subtitles.srt"
+OUTPUT_FILE = "output.mp4"
 
-@app.on_message(filters.video & filters.private)
-async def receive_video(client, message):
-    video_file = await message.download()
+@bot.on_message(filters.command("start"))
+async def start(client, message: Message):
+    await message.reply_text('Hi! Send me a video and then an audio file to merge them. You can also use /extract_audio to extract audio from a video or /extract_subtitles to extract subtitles.')
 
-    # Save the video file path in the bot's context
-    app.video_file = video_file
-    
-    if 'extract_audio' in message.text:
-        # Extract audio from video
-        output_audio_file = "extracted_audio.mp3"
-        cmd = [
-            'ffmpeg',
-            '-i', video_file,
-            '-q:a', '0',
-            '-map', 'a',
-            output_audio_file
-        ]
+@bot.on_message(filters.video | filters.document.mime_type("video/mp4"))
+async def handle_video(client, message: Message):
+    await message.download(file_name=VIDEO_FILE)
+    await message.reply_text('Video received! Now send me an audio file or use /extract_audio or /extract_subtitles.')
+
+@bot.on_message(filters.audio | filters.document.mime_type("audio/mpeg"))
+async def handle_audio(client, message: Message):
+    await message.download(file_name=AUDIO_FILE)
+    await message.reply_text('Audio received! Merging now...')
+    await merge_video_audio(message)
+
+@bot.on_message(filters.command("extract_audio"))
+async def extract_audio_command(client, message: Message):
+    await message.reply_text('Send me a video file to extract audio.')
+
+@bot.on_message(filters.command("extract_subtitles"))
+async def extract_subtitles_command(client, message: Message):
+    await message.reply_text('Send me a video file to extract subtitles.')
+
+@bot.on_message(filters.video & filters.command("extract_audio"))
+async def extract_audio(client, message: Message):
+    await message.download(file_name=VIDEO_FILE)
+    await message.reply_text('Extracting audio...')
+    await extract_audio_from_video(message)
+
+@bot.on_message(filters.video & filters.command("extract_subtitles"))
+async def extract_subtitles(client, message: Message):
+    await message.download(file_name=VIDEO_FILE)
+    await message.reply_text('Extracting subtitles...')
+    await extract_subtitles_from_video(message)
+
+async def merge_video_audio(message: Message):
+    try:
+        input_video = ffmpeg.input(VIDEO_FILE)
+        input_audio = ffmpeg.input(AUDIO_FILE)
+        ffmpeg.output(input_video, input_audio, OUTPUT_FILE, vcodec='copy', acodec='aac', strict='experimental').run()
         
-        # Run ffmpeg command
-        await subprocess.run(cmd, check=True)
+        current_time = datetime.now(pytz.timezone('UTC')).strftime('%Y-%m-%d %H:%M:%S %Z')
+        await message.reply_text(f'Merging complete! Sending the merged file... ({current_time})')
         
-        # Send the extracted audio back to the user
-        await message.reply_document(output_audio_file)
+        await message.reply_document(OUTPUT_FILE)
+    except Exception as e:
+        await message.reply_text(f'An error occurred: {e}')
+    finally:
+        cleanup_files()
 
-        # Clean up files
-        os.remove(video_file)
-        os.remove(output_audio_file)
+async def extract_audio_from_video(message: Message):
+    try:
+        ffmpeg.input(VIDEO_FILE).output(EXTRACTED_AUDIO_FILE).run()
+        
+        await message.reply_text('Audio extraction complete! Sending the audio file...')
+        
+        await message.reply_document(EXTRACTED_AUDIO_FILE)
+    except Exception as e:
+        await message.reply_text(f'An error occurred: {e}')
+    finally:
+        cleanup_files()
 
-    else:
-        # Notify user to send audio if needed (already handled)
-        await message.reply("Video received! If you need to extract audio, use the Extract Audio option.")
+async def extract_subtitles_from_video(message: Message):
+    try:
+        ffmpeg.input(VIDEO_FILE).output(SUBTITLES_FILE).run()
+        
+        await message.reply_text('Subtitles extraction complete! Sending the subtitles file...')
+        
+        await message.reply_document(SUBTITLES_FILE)
+    except Exception as e:
+        await message.reply_text(f'An error occurred: {e}')
+    finally:
+        cleanup_files()
 
-@app.on_message(filters.audio & filters.private)
-async def receive_audio(client, message):
-    audio_file = await message.download()
+def cleanup_files():
+    if os.path.exists(VIDEO_FILE):
+        os.remove(VIDEO_FILE)
+    if os.path.exists(AUDIO_FILE):
+        os.remove(AUDIO_FILE)
+    if os.path.exists(EXTRACTED_AUDIO_FILE):
+        os.remove(EXTRACTED_AUDIO_FILE)
+    if os.path.exists(SUBTITLES_FILE):
+        os.remove(SUBTITLES_FILE)
+    if os.path.exists(OUTPUT_FILE):
+        os.remove(OUTPUT_FILE)
 
-    # Retrieve video file from bot context
-    video_file = getattr(app, 'video_file', None)
-    if not video_file:
-        await message.reply("Please send the video file first.")
-        return
-
-    # Define output file path
-    output_file = "merged_output.mp4"
-
-    # Merge video and audio
-    cmd = [
-        'ffmpeg',
-        '-i', video_file,
-        '-i', audio_file,
-        '-c:v', 'copy',
-        '-c:a', 'aac',
-        '-strict', 'experimental',
-        output_file
-    ]
-
-    # Run ffmpeg command
-    await subprocess.run(cmd, check=True)
-
-    # Send the merged file back to the user
-    await message.reply_document(output_file)
-
-    # Clean up files
-    os.remove(video_file)
-    os.remove(audio_file)
-    os.remove(output_file)
-
-app.run()
+if __name__ == '__main__':
+    bot.start()
+    asyncio.get_event_loop().run_forever()
