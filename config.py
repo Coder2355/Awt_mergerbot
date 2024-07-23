@@ -6,8 +6,12 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', '7116266807:AAFiuS4MxcubBiHRyzKEDnmYPCRiS0f3a
 
 # Directories for file storage
 DOWNLOAD_DIR = os.getenv('DOWNLOAD_DIR', 'downloads')
-OUTPUT_DIR = os.getenv('OUTPUT_DIR', 'output')
+OUTPUT_DIR = os.getenv('OUTPUT_DIR', 'outputs')
 DOWNLOAD_PATH = "downloads/"
+
+# Directory paths for downloading and saving files
+DOWNLOAD_DIR = 'downloads'  # Directory to save downloaded videos
+OUTPUT_DIR = 'outputs'  # Directory to save extracted audio files
 
 # Flask configuration
 FLASK_HOST = os.getenv('FLASK_HOST', '0.0.0.0')
