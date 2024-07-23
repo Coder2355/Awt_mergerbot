@@ -65,6 +65,7 @@ async def handle_document(client, message: Message):
 
 async def merge_video_audio():
     try:
+        # Merge video and audio into a single output file
         ffmpeg.input(VIDEO_FILE).output(AUDIO_FILE, OUTPUT_FILE, vcodec='copy', acodec='aac', strict='experimental').run()
         
         current_time = datetime.now(pytz.timezone('UTC')).strftime('%Y-%m-%d %H:%M:%S %Z')
@@ -78,6 +79,7 @@ async def merge_video_audio():
 
 async def extract_audio_from_video():
     try:
+        # Extract audio from video
         ffmpeg.input(VIDEO_FILE).output(EXTRACTED_AUDIO_FILE).run()
         
         await message.reply_text('Audio extraction complete! Sending the audio file...')
@@ -90,6 +92,7 @@ async def extract_audio_from_video():
 
 async def extract_subtitles_from_video():
     try:
+        # Extract subtitles from video
         ffmpeg.input(VIDEO_FILE).output(SUBTITLES_FILE).run()
         
         await message.reply_text('Subtitles extraction complete! Sending the subtitles file...')
