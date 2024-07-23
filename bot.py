@@ -3,7 +3,7 @@ import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from threading import Thread
-from config import API_ID, API_HASH, BOT_TOKEN
+import config
 from flask import Flask, send_file
 
 app = Client("audio_extractor_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
