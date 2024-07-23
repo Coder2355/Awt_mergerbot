@@ -24,12 +24,22 @@ OUTPUT_FILE = "output.mp4"
 async def start(client, message: Message):
     await message.reply_text('Hi! Send me a video and then an audio file to merge them. You can also use /extract_audio to extract audio from a video or /extract_subtitles to extract subtitles.')
 
-@bot.on_message(filters.video | filters.document.mime_type("video/mp4"))
+@bot.on_message(filters.video)
 async def handle_video(client, message: Message):
     await message.download(file_name=VIDEO_FILE)
     await message.reply_text('Video received! Now send me an audio file or use /extract_audio or /extract_subtitles.')
 
-@bot.on_message(filters.audio | filters.document.mime_type("audio/mpeg"))
+@bot.on_message(filters.document)
+async def handle_document(client, message: Message):
+    if message.document.mime_type.startswith("video/"):
+        await message.download(file_name=VIDEO_FILE)
+        await message.reply_text('Video received! Now send me an audio file or use /extract_audio or /extract_subtitles.')
+    elif message.document.mime_type.startswith("audio/"):
+        await message.download(file_name=AUDIO_FILE)
+        await message.reply_text('Audio received! Merging now...')
+        await merge_video_audio(message)
+
+@bot.on_message(filters.audio)
 async def handle_audio(client, message: Message):
     await message.download(file_name=AUDIO_FILE)
     await message.reply_text('Audio received! Merging now...')
