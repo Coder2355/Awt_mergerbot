@@ -1,8 +1,8 @@
 import os
 import subprocess
+import re
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from threading import Thread
 from flask import Flask, send_file
 import config  # Import your config module
 import asyncio
@@ -26,29 +26,25 @@ def extract_audio(video_path: str, output_dir: str):
         '-i', video_path,
         '-map', 'a',  # Select all audio streams
         '-f', 'ffmetadata',  # Output metadata
-        os.path.join(output_dir, 'metadata.txt')
+        '-'
     ]
-    subprocess.run(command_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    result = subprocess.run(command_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    metadata = result.stderr
 
-    # Read metadata to get stream info
-    with open(os.path.join(output_dir, 'metadata.txt'), 'r') as metadata_file:
-        lines = metadata_file.readlines()
-
-    # Extract audio based on stream info
-    for line in lines:
-        if 'Stream' in line and 'Audio' in line:
-            parts = line.split(' ')
-            stream_index = parts[1].split(':')[1]
-            output_audio_path = os.path.join(output_dir, f'audio_{stream_index}.mp3')
-            extract_command = [
-                'ffmpeg',
-                '-i', video_path,
-                '-map', f'a:{stream_index}',  # Select specific audio stream
-                '-acodec', 'mp3',  # Use MP3 codec
-                '-q:a', '2',  # Variable bitrate quality level
-                output_audio_path
-            ]
-            subprocess.run(extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Extract audio streams based on metadata
+    audio_streams = re.findall(r'Stream #(\d+:\d+).*Audio', metadata)
+    for stream_index in audio_streams:
+        output_audio_path = os.path.join(output_dir, f'audio_{stream_index}.mp3')
+        extract_command = [
+            'ffmpeg',
+            '-i', video_path,
+            '-map', f'{stream_index}',  # Select specific audio stream
+            '-acodec', 'mp3',  # Use MP3 codec
+            '-q:a', '2',  # Variable bitrate quality level
+            output_audio_path
+        ]
+        subprocess.run(extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 @app.on_message(filters.video)
 async def handle_video(client: Client, message: Message):
