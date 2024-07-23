@@ -1,8 +1,8 @@
 import os
 import ffmpeg
-from flask import Flask, request
+from flask import Flask
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
 import pytz
 import asyncio
@@ -20,20 +20,39 @@ EXTRACTED_AUDIO_FILE = "extracted_audio.mp3"
 SUBTITLES_FILE = "subtitles.srt"
 OUTPUT_FILE = "output.mp4"
 
+# Define the inline keyboard
+start_keyboard = InlineKeyboardMarkup(
+    [
+        [InlineKeyboardButton("Merge Video and Audio", callback_data="merge")],
+        [InlineKeyboardButton("Extract Audio", callback_data="extract_audio")],
+        [InlineKeyboardButton("Extract Subtitles", callback_data="extract_subtitles")],
+    ]
+)
+
 @bot.on_message(filters.command("start"))
 async def start(client, message: Message):
-    await message.reply_text('Hi! Send me a video and then an audio file to merge them. You can also use /extract_audio to extract audio from a video or /extract_subtitles to extract subtitles.')
+    await message.reply_text('Hi! Choose an action:', reply_markup=start_keyboard)
+
+@bot.on_callback_query()
+async def handle_callback_query(client, callback_query):
+    if callback_query.data == "merge":
+        await callback_query.message.reply_text('Send me a video file to start merging with an audio file.')
+    elif callback_query.data == "extract_audio":
+        await callback_query.message.reply_text('Send me a video file to extract audio.')
+    elif callback_query.data == "extract_subtitles":
+        await callback_query.message.reply_text('Send me a video file to extract subtitles.')
+    await callback_query.answer()
 
 @bot.on_message(filters.video)
 async def handle_video(client, message: Message):
     await message.download(file_name=VIDEO_FILE)
-    await message.reply_text('Video received! Now send me an audio file or use /extract_audio or /extract_subtitles.')
+    await message.reply_text('Video received! Now send me an audio file or use the buttons to perform other actions.', reply_markup=start_keyboard)
 
 @bot.on_message(filters.document)
 async def handle_document(client, message: Message):
     if message.document.mime_type.startswith("video/"):
         await message.download(file_name=VIDEO_FILE)
-        await message.reply_text('Video received! Now send me an audio file or use /extract_audio or /extract_subtitles.')
+        await message.reply_text('Video received! Now send me an audio file or use the buttons to perform other actions.', reply_markup=start_keyboard)
     elif message.document.mime_type.startswith("audio/"):
         await message.download(file_name=AUDIO_FILE)
         await message.reply_text('Audio received! Merging now...')
@@ -45,26 +64,6 @@ async def handle_audio(client, message: Message):
     await message.reply_text('Audio received! Merging now...')
     await merge_video_audio(message)
 
-@bot.on_message(filters.command("extract_audio"))
-async def extract_audio_command(client, message: Message):
-    await message.reply_text('Send me a video file to extract audio.')
-
-@bot.on_message(filters.command("extract_subtitles"))
-async def extract_subtitles_command(client, message: Message):
-    await message.reply_text('Send me a video file to extract subtitles.')
-
-@bot.on_message(filters.video & filters.command("extract_audio"))
-async def extract_audio(client, message: Message):
-    await message.download(file_name=VIDEO_FILE)
-    await message.reply_text('Extracting audio...')
-    await extract_audio_from_video(message)
-
-@bot.on_message(filters.video & filters.command("extract_subtitles"))
-async def extract_subtitles(client, message: Message):
-    await message.download(file_name=VIDEO_FILE)
-    await message.reply_text('Extracting subtitles...')
-    await extract_subtitles_from_video(message)
-
 async def merge_video_audio(message: Message):
     try:
         input_video = ffmpeg.input(VIDEO_FILE)
@@ -75,8 +74,8 @@ async def merge_video_audio(message: Message):
         await message.reply_text(f'Merging complete! Sending the merged file... ({current_time})')
         
         await message.reply_document(OUTPUT_FILE)
-    except Exception as e:
-        await message.reply_text(f'An error occurred: {e}')
+    except ffmpeg.Error as e:
+        await message.reply_text(f'An error occurred: {e.stderr.decode()}')
     finally:
         cleanup_files()
 
@@ -87,8 +86,8 @@ async def extract_audio_from_video(message: Message):
         await message.reply_text('Audio extraction complete! Sending the audio file...')
         
         await message.reply_document(EXTRACTED_AUDIO_FILE)
-    except Exception as e:
-        await message.reply_text(f'An error occurred: {e}')
+    except ffmpeg.Error as e:
+        await message.reply_text(f'An error occurred: {e.stderr.decode()}')
     finally:
         cleanup_files()
 
@@ -99,8 +98,8 @@ async def extract_subtitles_from_video(message: Message):
         await message.reply_text('Subtitles extraction complete! Sending the subtitles file...')
         
         await message.reply_document(SUBTITLES_FILE)
-    except Exception as e:
-        await message.reply_text(f'An error occurred: {e}')
+    except ffmpeg.Error as e:
+        await message.reply_text(f'An error occurred: {e.stderr.decode()}')
     finally:
         cleanup_files()
 
