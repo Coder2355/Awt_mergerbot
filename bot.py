@@ -13,6 +13,11 @@ flask_app = Flask(__name__)
 os.makedirs(config.DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(config.OUTPUT_DIR, exist_ok=True)
 
+@app.on_message(filters.command("start"))
+async def start_command(client: Client, message: Message):
+    """Handle /start command."""
+    await message.reply("Welcome! Send me a video, and I'll extract the audio for you.")
+
 def extract_audio(video_path: str, audio_path: str):
     """Extract audio from video using FFmpeg."""
     command = [
@@ -24,16 +29,6 @@ def extract_audio(video_path: str, audio_path: str):
         audio_path
     ]
     subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-@app.on_message(filters.command("start"))
-async def start_command(client: Client, message: Message):
-    """Handle /start command."""
-    await message.reply("Welcome! Send me a video, and I'll extract the audio for you.")
-
-@app.on_message(filters.command("help"))
-async def help_command(client: Client, message: Message):
-    """Handle /help command."""
-    await message.reply("Send me a video file, and I'll extract the audio. Use /start to begin.")
 
 @app.on_message(filters.video)
 async def handle_video(client: Client, message: Message):
