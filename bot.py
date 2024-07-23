@@ -96,7 +96,7 @@ async def handle_video(client: Client, message: Message):
         'video_file': video_file,
         'audio_output_dir': audio_output_dir,
         'track_info': track_info,
-        'reply_message_id': reply_message.message_id  # Fixed issue
+        'reply_message': reply_message  # Store the whole message object
     }
 
 @app.on_callback_query()
@@ -114,9 +114,9 @@ async def handle_callback_query(client: Client, query):
             await query.message.reply_document(audio_path, caption=f"Audio: {track_name}\nDuration: {get_audio_duration(audio_path)} seconds")
             
             # Delete the original reply message
-            if user_data['reply_message_id']:
+            if user_data.get('reply_message'):
                 try:
-                    await query.message.delete()
+                    await user_data['reply_message'].delete()
                 except Exception as e:
                     print(f"Failed to delete message: {e}")
 
