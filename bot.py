@@ -2,21 +2,16 @@ import os
 import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from threading import Thread
 from flask import Flask, send_file
 import config  # Import your config module
 import asyncio
-from threading import Thread
 
 app = Client("audio_extractor_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
 flask_app = Flask(__name__)
 
 os.makedirs(config.DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(config.OUTPUT_DIR, exist_ok=True)
-
-@app.on_message(filters.command("start"))
-async def start_command(client: Client, message: Message):
-    """Handle /start command."""
-    await message.reply("Welcome! Use /extract_audio and reply to a video, file, or document to extract audio.")
 
 def extract_audio(video_path: str, audio_path: str):
     """Extract audio from video using FFmpeg."""
@@ -30,47 +25,61 @@ def extract_audio(video_path: str, audio_path: str):
     ]
     subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-@app.on_message(filters.command("extract_audio") & (filters.video | filters.document | filters.audio))
+def remove_subtitles(video_path: str, output_path: str):
+    """Remove subtitles from video using FFmpeg."""
+    command = [
+        'ffmpeg',
+        '-i', video_path,
+        '-c', 'copy',  # Copy video and audio streams
+        '-sn',  # Remove subtitles
+        output_path
+    ]
+    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+@app.on_message(filters.command("start"))
+async def start_command(client: Client, message: Message):
+    """Handle /start command."""
+    await message.reply("Welcome! Send me a video with the /extract_audio command to extract audio or /remove_subtitles to remove subtitles.")
+
+@app.on_message(filters.command("help"))
+async def help_command(client: Client, message: Message):
+    """Handle /help command."""
+    await message.reply("To extract audio from a video, use the /extract_audio command and send the video file.\n"
+                       "To remove subtitles, use the /remove_subtitles command and send the video file.")
+
+@app.on_message(filters.command("extract_audio") & filters.video)
 async def extract_audio_command(client: Client, message: Message):
     """Handle /extract_audio command."""
-    reply_message = message.reply_to_message
+    await message.reply("Downloading your video...")
 
-    if not reply_message:
-        await message.reply("Please reply to a video, file, or document with the /extract_audio command.")
-        return
+    video_file = await message.download(file_name=os.path.join(config.DOWNLOAD_DIR, message.video.file_name))
+    await message.reply("Extracting audio...")
 
-    if reply_message.video or reply_message.document or reply_message.audio:
-        await message.reply("Downloading your file...")
+    audio_file = os.path.join(config.OUTPUT_DIR, f"{os.path.splitext(message.video.file_name)[0]}.mp3")
+    
+    extract_audio(video_file, audio_file)
+    
+    await message.reply_document(audio_file)
+    
+    os.remove(video_file)
+    os.remove(audio_file)
 
-        # Determine the file type and download the file
-        file_type = 'video' if reply_message.video else 'document' if reply_message.document else 'audio'
-        file_name = getattr(reply_message, file_type).file_name
-        file_path = await reply_message.download(file_name=os.path.join(config.DOWNLOAD_DIR, file_name))
-        
-        await message.reply("Extracting audio...")
+@app.on_message(filters.command("remove_subtitles") & filters.video)
+async def remove_subtitles_command(client: Client, message: Message):
+    """Handle /remove_subtitles command."""
+    await message.reply("Downloading your video...")
 
-        audio_path = os.path.join(config.OUTPUT_DIR, f"{os.path.splitext(file_name)[0]}.mp3")
-        
-        # Extract audio with progress reporting
-        await extract_audio_with_progress(file_path, audio_path)
-        
-        await message.reply_document(audio_path)
-        
-        os.remove(file_path)
-        os.remove(audio_path)
-    else:
-        await message.reply("Please reply to a video, file, or document with the /extract_audio command.")
+    video_file = await message.download(file_name=os.path.join(config.DOWNLOAD_DIR, message.video.file_name))
+    await message.reply("Removing subtitles...")
 
-async def extract_audio_with_progress(file_path: str, audio_path: str):
-    """Extract audio from video, file, or document with progress reporting."""
-    # Notify about progress
-    process = subprocess.Popen(
-        ['ffmpeg', '-i', file_path, '-vn', '-acodec', 'mp3', '-q:a', '2', audio_path],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    for line in process.stderr:
-        if b'Duration' in line:
-            await asyncio.sleep(1)  # Simulate progress reporting
+    output_file = os.path.join(config.OUTPUT_DIR, f"{os.path.splitext(message.video.file_name)[0]}_no_subs.mp4")
+    
+    remove_subtitles(video_file, output_file)
+    
+    await message.reply_document(output_file)
+    
+    os.remove(video_file)
+    os.remove(output_file)
 
 @flask_app.route('/status')
 def status():
