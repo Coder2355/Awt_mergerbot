@@ -2,7 +2,7 @@ import os
 import subprocess
 import re
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from flask import Flask, send_file
 import config  # Import your config module
 import asyncio
@@ -18,8 +18,8 @@ async def start_command(client: Client, message: Message):
     """Handle /start command."""
     await message.reply("Welcome! Send me a video, and I'll extract the audio for you.")
 
-def extract_audio(video_path: str, output_dir: str):
-    """Extract all audio tracks from video using FFmpeg."""
+def extract_audio(video_path: str, output_dir: str) -> dict:
+    """Extract all audio tracks from video using FFmpeg and return a dictionary of tracks."""
     # Get the list of audio streams
     command_list = [
         'ffmpeg',
@@ -34,7 +34,8 @@ def extract_audio(video_path: str, output_dir: str):
 
     # Extract audio streams based on metadata
     audio_streams = re.findall(r'Stream #(\d+:\d+).*Audio', metadata)
-    for stream_index in audio_streams:
+    track_info = {}
+    for i, stream_index in enumerate(audio_streams):
         output_audio_path = os.path.join(output_dir, f'audio_{stream_index}.mp3')
         extract_command = [
             'ffmpeg',
@@ -45,10 +46,25 @@ def extract_audio(video_path: str, output_dir: str):
             output_audio_path
         ]
         subprocess.run(extract_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        track_info[f'audio_{stream_index}.mp3'] = stream_index
+
+    return track_info
+
+def get_audio_duration(audio_path: str) -> str:
+    """Get the duration of an audio file."""
+    command = [
+        'ffprobe',
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        audio_path
+    ]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return result.stdout.strip()
 
 @app.on_message(filters.video)
 async def handle_video(client: Client, message: Message):
-    """Handle incoming video messages with progress reporting."""
+    """Handle incoming video messages and show audio track selection."""
     await message.reply("Downloading your video...")
 
     # Download video
@@ -60,17 +76,47 @@ async def handle_video(client: Client, message: Message):
     os.makedirs(audio_output_dir, exist_ok=True)
 
     # Extract all audio streams
-    extract_audio(video_file, audio_output_dir)
+    track_info = extract_audio(video_file, audio_output_dir)
 
-    # Send all extracted audio files
-    audio_files = [os.path.join(audio_output_dir, f) for f in os.listdir(audio_output_dir) if f.endswith('.mp3')]
-    for audio_file in audio_files:
-        await message.reply_document(audio_file)
-    
-    # Clean up temporary files
-    os.remove(video_file)
-    for audio_file in audio_files:
-        os.remove(audio_file)
+    # Create inline keyboard for audio track selection
+    buttons = []
+    for track_name, stream_index in track_info.items():
+        duration = get_audio_duration(os.path.join(audio_output_dir, track_name))
+        buttons.append([InlineKeyboardButton(f"{track_name} ({duration}s)", callback_data=track_name)])
+
+    reply_markup = InlineKeyboardMarkup(buttons)
+    await message.reply("Select an audio track to download:", reply_markup=reply_markup)
+
+    # Store the track info in user data
+    app.user_data[message.from_user.id] = {
+        'video_file': video_file,
+        'audio_output_dir': audio_output_dir,
+        'track_info': track_info
+    }
+
+@app.on_callback_query()
+async def handle_callback_query(client: Client, query):
+    """Handle the callback query from the inline keyboard."""
+    user_id = query.from_user.id
+    track_name = query.data
+
+    if user_id in app.user_data:
+        user_data = app.user_data[user_id]
+        audio_path = os.path.join(user_data['audio_output_dir'], track_name)
+        
+        if os.path.exists(audio_path):
+            await query.message.reply_document(audio_path, caption=f"Audio: {track_name}\nDuration: {get_audio_duration(audio_path)} seconds")
+        else:
+            await query.message.reply("The selected audio track is no longer available.")
+
+        # Clean up temporary files
+        os.remove(user_data['video_file'])
+        for file in os.listdir(user_data['audio_output_dir']):
+            os.remove(os.path.join(user_data['audio_output_dir'], file))
+        os.rmdir(user_data['audio_output_dir'])
+        del app.user_data[user_id]
+    else:
+        await query.message.reply("No video file found for this session.")
 
 @flask_app.route('/status')
 def status():
@@ -84,4 +130,5 @@ def download_audio(filename):
     return "File not found", 404
 
 if __name__ == "__main__":
+    app.user_data = {}  # Initialize user data storage
     app.run()
