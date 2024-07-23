@@ -3,6 +3,7 @@ import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from threading import Thread
+from config import API_ID, API_HASH, BOT_TOKEN
 from flask import Flask, send_file
 
 # Replace with your actual API ID, API hash, and bot token
