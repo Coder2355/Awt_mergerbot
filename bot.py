@@ -91,12 +91,12 @@ async def handle_video(client: Client, message: Message):
     reply_markup = InlineKeyboardMarkup(buttons)
     reply_message = await message.reply("Select an audio track to download:", reply_markup=reply_markup)
 
-    # Store the track info in user data
+    # Store the track info and reply message ID in user data
     app.user_data[message.from_user.id] = {
         'video_file': video_file,
         'audio_output_dir': audio_output_dir,
         'track_info': track_info,
-        'reply_message_id': reply_message.message_id
+        'reply_message_id': reply_message.message_id  # Fixed issue
     }
 
 @app.on_callback_query()
@@ -111,10 +111,14 @@ async def handle_callback_query(client: Client, query):
         
         if os.path.exists(audio_path):
             # Send the audio file
-            reply_message = await query.message.reply_document(audio_path, caption=f"Audio: {track_name}\nDuration: {get_audio_duration(audio_path)} seconds")
+            await query.message.reply_document(audio_path, caption=f"Audio: {track_name}\nDuration: {get_audio_duration(audio_path)} seconds")
             
-            # Optionally delete the original reply message after sending the audio
-            await query.message.delete()
+            # Delete the original reply message
+            if user_data['reply_message_id']:
+                try:
+                    await query.message.delete()
+                except Exception as e:
+                    print(f"Failed to delete message: {e}")
 
             # Clean up temporary files
             os.remove(user_data['video_file'])
