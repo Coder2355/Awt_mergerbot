@@ -1,92 +1,107 @@
 import os
-import subprocess
+import asyncio
+import aiofiles
+from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor
 from flask import Flask, request, jsonify
 from pyrogram import Client, filters
 from pyrogram.types import Message
-import config
-import asyncio
-import threading
+from config import config  # Import the config module
 
-# Initialize the bot with configuration from config.py
-app = Client("audio_extractor_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
+app = Client("audio_subtitle_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
 
 # Initialize Flask web server
 web_app = Flask(__name__)
 
-# Ensure the download directory exists
-os.makedirs(config.DOWNLOAD_PATH, exist_ok=True)
+# Initialize executor for async FFmpeg processing
+executor = ProcessPoolExecutor()
 
-# Progress tracking callback
-async def progress(current, total, message_id, bot, chat_id):
-    percent = (current / total) * 100
-    await bot.edit_message_text(chat_id, message_id, f"Download Progress: {percent:.2f}%")
+def run_ffmpeg_command(command):
+    os.system(command)
 
-@app.on_message(filters.command("start") & filters.private)
-async def start(client, message: Message):
-    await message.reply_text("Hi! Send me a video file and I'll extract the audio for you. If you want to remove subtitles as well, use the /remove_subs command followed by the video file.")
+async def async_run_ffmpeg_command(command):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(executor, run_ffmpeg_command, command)
 
-@app.on_message(filters.video & filters.private & ~filters.command("remove_subs"))
-async def extract_audio(client, message: Message):
-    video = message.video
-    video_file_path = os.path.join(config.DOWNLOAD_PATH, "video.mp4")
-    audio_file_path = os.path.splitext(video_file_path)[0] + ".mp3"
+async def download_file_with_progress(client, message: Message, file_path: str):
+    total_size = message.video.file_size
+    progress = tqdm(total=total_size, unit='B', unit_scale=True, unit_divisor=1024, desc="Downloading")
 
-    # Download video asynchronously
-    await client.download_media(message, video_file_path, progress=progress)
+    async def progress_callback(update, total_size):
+        progress.update(update)
 
-    # Extract audio using FFmpeg
-    command = f"ffmpeg -i {video_file_path} -q:a 0 -map a -y {audio_file_path}"
-    subprocess.run(command, shell=True, check=True)
+    await client.download_media(message, file_path, progress_callback=progress_callback)
+    progress.close()
 
-    # Send the audio file with progress
-    async def progress_upload(current, total):
-        percent = (current / total) * 100
-        await client.send_message(message.chat.id, f"Upload Progress: {percent:.2f}%")
+@app.on_message(filters.video)
+async def handle_video(client, message: Message):
+    file_id = message.video.file_id
+    file_path = os.path.join(config.TEMP_DIR, f'{file_id}.mp4')
+    
+    # Download the file with progress reporting
+    await download_file_with_progress(client, message, file_path)
 
-    await client.send_audio(message.chat.id, audio_file_path, progress=progress_upload)
+    # Prepare FFmpeg commands
+    audio_path = file_path.replace('.mp4', '.mp3')
+    video_no_subs_path = file_path.replace('.mp4', '_nosub.mp4')
+    remove_subs_command = f'{config.FFMPEG_COMMAND} -i {file_path} -vf "subtitles={file_path}" -c:v libx264 -c:a aac {video_no_subs_path}'
+    extract_audio_command = f'{config.FFMPEG_COMMAND} -i {file_path} -q:a 0 -map a {audio_path}'
 
-    # Clean up
-    os.remove(video_file_path)
-    os.remove(audio_file_path)
+    # Run FFmpeg commands asynchronously
+    await asyncio.gather(
+        async_run_ffmpeg_command(extract_audio_command),
+        async_run_ffmpeg_command(remove_subs_command)
+    )
 
-@app.on_message(filters.video & filters.private & filters.command("remove_subs"))
-async def remove_subs_and_extract_audio(client, message: Message):
-    video = message.video
-    video_file_path = os.path.join(config.DOWNLOAD_PATH, "video.mp4")
-    video_no_subs_file_path = os.path.splitext(video_file_path)[0] + "_nosubs.mp4"
-    audio_file_path = os.path.splitext(video_file_path)[0] + ".mp3"
+    # Send processed files with progress reporting
+    await client.send_document(message.chat.id, audio_path)
+    await client.send_document(message.chat.id, video_no_subs_path)
 
-    # Download video asynchronously
-    await client.download_media(message, video_file_path, progress=progress)
+    # Clean up local files
+    os.remove(file_path)
+    os.remove(audio_path)
+    os.remove(video_no_subs_path)
 
-    # Remove subtitles using FFmpeg
-    command_remove_subs = f"ffmpeg -i {video_file_path} -map 0:v -map 0:a -c copy -an -y {video_no_subs_file_path}"
-    subprocess.run(command_remove_subs, shell=True, check=True)
+@web_app.route('/send_file', methods=['POST'])
+async def send_file():
+    file = request.files['file']
+    file_path = os.path.join(config.TEMP_DIR, file.filename)
+    total_size = len(file.read())
+    file.seek(0)
+    
+    # Save the file with progress reporting
+    progress = tqdm(total=total_size, unit='B', unit_scale=True, unit_divisor=1024, desc="Saving file")
 
-    # Extract audio from the video without subtitles
-    command_extract_audio = f"ffmpeg -i {video_no_subs_file_path} -q:a 0 -map a -y {audio_file_path}"
-    subprocess.run(command_extract_audio, shell=True, check=True)
+    async def save_file():
+        async with aiofiles.open(file_path, 'wb') as out_file:
+            chunk_size = 8192
+            while True:
+                chunk = file.read(chunk_size)
+                if not chunk:
+                    break
+                await out_file.write(chunk)
+                progress.update(len(chunk))
+    
+    await save_file()
+    progress.close()
 
-    # Send the audio file with progress
-    async def progress_upload(current, total):
-        percent = (current / total) * 100
-        await client.send_message(message.chat.id, f"Upload Progress: {percent:.2f}%")
+    # Prepare FFmpeg commands
+    audio_path = file_path.replace('.mp4', '.mp3')
+    video_no_subs_path = file_path.replace('.mp4', '_nosub.mp4')
+    remove_subs_command = f'{config.FFMPEG_COMMAND} -i {file_path} -vf "subtitles={file_path}" -c:v libx264 -c:a aac {video_no_subs_path}'
+    extract_audio_command = f'{config.FFMPEG_COMMAND} -i {file_path} -q:a 0 -map a {audio_path}'
 
-    await client.send_audio(message.chat.id, audio_file_path, progress=progress_upload)
+    # Run FFmpeg commands asynchronously
+    await asyncio.gather(
+        async_run_ffmpeg_command(extract_audio_command),
+        async_run_ffmpeg_command(remove_subs_command)
+    )
 
-    # Clean up
-    os.remove(video_file_path)
-    os.remove(video_no_subs_file_path)
-    os.remove(audio_file_path)
-
-# Web server routes
-@web_app.route('/')
-def index():
-    return 'Audio Extractor Bot is running!'
-
-@web_app.route('/status', methods=['GET'])
-def status():
-    return jsonify({'status': 'running'})
+    # Return processed file paths
+    return jsonify({
+        'audio': audio_path,
+        'video_no_subs': video_no_subs_path
+    })
 
 if __name__ == "__main__":
     app.run()
