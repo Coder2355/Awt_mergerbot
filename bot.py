@@ -1,10 +1,10 @@
 from pyrogram import Client, filters
 from flask import Flask, request, jsonify
-import ffmpeg
 import os
 import threading
 import logging
 import config
+import ffmpeg as ffmpeg_util
 
 app = Client("video_merger_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
 
@@ -28,9 +28,9 @@ async def merge_videos(client, message):
         
         output_path = os.path.join(VIDEO_DIR, "merged_video.mp4")
         try:
-            ffmpeg.input(video1_path).input(video2_path).output(output_path, vcodec='libx264', acodec='aac', strict='experimental').run()
+            ffmpeg_util.merge_videos(video1_path, video2_path, output_path)
             await message.reply_document(output_path)
-        except Exception as e:
+        except RuntimeError as e:
             logging.error(f"Error during video merging: {e}")
             await message.reply("An error occurred while merging the videos.")
         finally:
@@ -51,9 +51,9 @@ async def merge_video_audio(client, message):
         
         output_path = os.path.join(VIDEO_DIR, "video_with_audio.mp4")
         try:
-            ffmpeg.input(video_path).input(audio_path).output(output_path, vcodec='copy', acodec='aac').run()
+            ffmpeg_util.merge_video_audio(video_path, audio_path, output_path)
             await message.reply_document(output_path)
-        except Exception as e:
+        except RuntimeError as e:
             logging.error(f"Error during video-audio merging: {e}")
             await message.reply("An error occurred while merging the video with audio.")
         finally:
