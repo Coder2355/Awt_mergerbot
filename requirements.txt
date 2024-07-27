@@ -6,3 +6,5 @@ tgcrypto
 gunicorn
 ffmpeg-python
 pytz
+Pillow
+hachoir
