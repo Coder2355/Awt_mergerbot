@@ -1,192 +1,110 @@
 import os
-import asyncio
-import time
 import subprocess
+import time
+import threading
 from pyrogram import Client, filters
-from pyrogram.errors import MessageNotModified
-from pyrogram.types import CallbackQuery, Message
-from config import Config
-from helpers.display_progress import Progress
-from helpers.ffmpeg_helper import take_screen_shot
-from helpers.rclone_upload import rclone_driver
-from helpers.uploader import uploadVideo
-from helpers.utils import UserSettings
-from PIL import Image
-from hachoir.metadata import extractMetadata
-from hachoir.parser import createParser
-import ffmpeg
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from tqdm import tqdm
+from flask import Flask, jsonify
+import asyncio
+from config import API_ID, API_HASH, BOT_TOKEN
 
-# MergeAudio function
-def MergeAudio(videoPath: str, files_list: list, user_id):
-    LOGGER.info("Generating Mux Command")
-    muxcmd = ["ffmpeg", "-hide_banner"]
-    videoData = ffmpeg.probe(filename=videoPath)
-    videoStreamsData = videoData.get("streams")
-    audioTracks = 0
+# Initialize the bot with your credentials from config
+app = Client("merge_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+flask_app = Flask(__name__)
 
-    for file in files_list:
-        muxcmd.append("-i")
-        muxcmd.append(file)
+# Temporary directories to store files
+VIDEO_DIR = "videos/"
+AUDIO_DIR = "audios/"
+OUTPUT_DIR = "output/"
+
+# Create directories if they don't exist
+os.makedirs(VIDEO_DIR, exist_ok=True)
+os.makedirs(AUDIO_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# In-memory storage for user data
+user_data = {}
+
+async def download_with_progress(message, file_name, file_size, desc):
+    with tqdm(total=file_size, unit="B", unit_scale=True, desc=desc) as pbar:
+        return await message.download(file_name=file_name, progress=pbar.update)
+
+@app.on_message(filters.video & filters.private)
+async def receive_video(client, message):
+    video_path = VIDEO_DIR + message.video.file_name
+    await message.reply_text("Downloading video...")
+
+    video_path = await download_with_progress(message, video_path, message.video.file_size, "Video Download")
+    await message.reply_text("Video received. Please send the audio file.")
     
-    muxcmd.extend(["-map", "0:v:0", "-map", "0:a:?"])
-    
-    for i in range(len(videoStreamsData)):
-        if videoStreamsData[i]["codec_type"] == "audio":
-            muxcmd.extend([f"-disposition:a:{audioTracks}", "0"])
-            audioTracks += 1
-    
-    fAudio = audioTracks
-    
-    for j in range(1, len(files_list)):
-        muxcmd.extend(["-map", f"{j}:a", f"-metadata:s:a:{audioTracks}", f"title=Track {audioTracks + 1} - tg@Anime_warrior_tamil"])
-        audioTracks += 1
+    user_data[message.from_user.id] = {"video": video_path}
 
-    muxcmd.extend([f"-disposition:s:a:{fAudio}", "default", "-map", "0:s:?", "-c:v", "copy", "-c:a", "copy", "-c:s", "copy", f"downloads/{str(user_id)}/[@Anime_warrior_tamil]_export.mkv"])
+@app.on_message(filters.audio & filters.private)
+async def receive_audio(client, message):
+    audio_path = AUDIO_DIR + message.audio.file_name
+    await message.reply_text("Downloading audio...")
 
-    LOGGER.info(muxcmd)
-    process = subprocess.call(muxcmd)
-    LOGGER.info(process)
-    return f"downloads/{str(user_id)}/[@Anime_warrior_tamil]_export.mkv"
+    audio_path = await download_with_progress(message, audio_path, message.audio.file_size, "Audio Download")
+    await message.reply_text("Audio received. Please select the start time for the audio in the video.",
+                             reply_markup=InlineKeyboardMarkup([
+                                 [InlineKeyboardButton("Start at 0:00", callback_data="start_0")],
+                                 [InlineKeyboardButton("Start at 0:30", callback_data="start_30")],
+                                 [InlineKeyboardButton("Start at 1:00", callback_data="start_60")],
+                                 [InlineKeyboardButton("Start at 1:30", callback_data="start_90")]
+                             ]))
 
-# Pyrogram bot setup
-app = Client("my_bot", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=Config.BOT_TOKEN)
+    user_data[message.from_user.id].update({"audio": audio_path})
 
 @app.on_callback_query()
-async def merge_audio(c: Client, cb: CallbackQuery):
-    omess = cb.message.reply_to_message
-    files_list = []
-    await cb.message.edit("⭕ Processing...")
-    duration = 0
-    video_mess = queueDB.get(cb.from_user.id)["videos"][0]
-    list_message_ids: list = queueDB.get(cb.from_user.id)["audios"]
-    list_message_ids.insert(0, video_mess)
-    list_message_ids.sort()
-
-    if list_message_ids is None:
-        await cb.answer("Queue Empty", show_alert=True)
-        await cb.message.delete(True)
-        return
-
-    if not os.path.exists(f"downloads/{str(cb.from_user.id)}/"):
-        os.makedirs(f"downloads/{str(cb.from_user.id)}/")
-
-    all_files = len(list_message_ids)
-    n = 1
-    msgs: list[Message] = await c.get_messages(chat_id=cb.from_user.id, message_ids=list_message_ids)
+async def handle_callback_query(client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    start_time = int(callback_query.data.split("_")[1])
     
-    for i in msgs:
-        media = i.video or i.document or i.audio
-        await cb.message.edit(f"📥 Starting Download of ... `{media.file_name}`")
-        LOGGER.info(f"📥 Starting Download of ... {media.file_name}")
-        currentFileNameExt = media.file_name.rsplit(sep=".")[-1].lower()
-        tmpFileName = "vid.mkv" if currentFileNameExt in VIDEO_EXTENSIONS else "audio." + currentFileNameExt
-
-        await asyncio.sleep(5)
-        file_dl_path = None
-
-        try:
-            c_time = time.time()
-            prog = Progress(cb.from_user.id, c, cb.message)
-            file_dl_path = await c.download_media(
-                message=media,
-                file_name=f"downloads/{str(cb.from_user.id)}/{str(i.id)}/{tmpFileName}",
-                progress=prog.progress_for_pyrogram,
-                progress_args=(f"🚀 Downloading: `{media.file_name}`", c_time, f"\n**Downloading: {n}/{all_files}**"),
-            )
-            n += 1
-            if gDict[cb.message.chat.id] and cb.message.id in gDict[cb.message.chat.id]:
-                return
-            await cb.message.edit(f"Downloaded Successfully ... `{media.file_name}`")
-            LOGGER.info(f"Downloaded Successfully ... {media.file_name}")
-            await asyncio.sleep(4)
-        except Exception as downloadErr:
-            LOGGER.warning(f"Failed to download Error: {downloadErr}")
-            queueDB.get(cb.from_user.id)["audios"].remove(i.id)
-            await cb.message.edit("❗File Skipped!")
-            await asyncio.sleep(4)
-            await cb.message.delete(True)
-            continue
-        files_list.append(f"{file_dl_path}")
-
-    muxed_video = MergeAudio(files_list[0], files_list, cb.from_user.id)
-    if muxed_video is None:
-        await cb.message.edit("❌ Failed to add audio to video!")
-        await delete_all(root=f"downloads/{str(cb.from_user.id)}")
-        queueDB.update({cb.from_user.id: {"videos": [], "subtitles": [], "audios": []}})
-        formatDB.update({cb.from_user.id: None})
+    if user_id not in user_data or "video" not in user_data[user_id] or "audio" not in user_data[user_id]:
+        await callback_query.answer("Please send the video and audio files first.")
         return
+
+    video_path = user_data[user_id]["video"]
+    audio_path = user_data[user_id]["audio"]
+    output_path = OUTPUT_DIR + f"merged_{os.path.basename(video_path)}"
     
-    try:
-        await cb.message.edit("✅ Successfully Muxed Video!")
-    except MessageNotModified:
-        await cb.message.edit("Successfully Muxed Video! ✅")
+    await callback_query.message.edit_text("Merging video and audio...")
+
+    merge_video_audio(video_path, audio_path, output_path, start_time)
     
-    LOGGER.info(f"Video muxed for: {cb.from_user.first_name}")
-    await asyncio.sleep(3)
-    file_size = os.path.getsize(muxed_video)
-    new_file_name = f"downloads/{str(cb.from_user.id)}/merged_video.mkv"
-    os.rename(muxed_video, new_file_name)
-    await cb.message.edit(f"🔄 Renaming Video to\n **{new_file_name.rsplit('/',1)[-1]}**")
-    await asyncio.sleep(4)
-    merged_video_path = new_file_name
+    await callback_query.message.edit_text("Uploading merged video...")
 
-    if UPLOAD_TO_DRIVE.get(f"{cb.from_user.id}"):
-        await rclone_driver(omess, cb, merged_video_path)
-        await delete_all(root=f"downloads/{str(cb.from_user.id)}")
-        queueDB.update({cb.from_user.id: {"videos": [], "subtitles": [], "audios": []}})
-        formatDB.update({cb.from_user.id: None})
-        return
+    with tqdm(total=os.path.getsize(output_path), unit="B", unit_scale=True, desc="Video Upload") as pbar:
+        await client.send_video(callback_query.message.chat.id, video=output_path, caption="Here is your merged file.",
+                                progress=pbar.update)
 
-    if file_size > 2044723200 and not Config.IS_PREMIUM:
-        await cb.message.edit(f"Video is Larger than 2GB, Can't Upload. Tell {Config.OWNER_USERNAME} to add premium account to get 4GB TG uploads.")
-        await delete_all(root=f"downloads/{str(cb.from_user.id)}")
-        queueDB.update({cb.from_user.id: {"videos": [], "subtitles": [], "audios": []}})
-        formatDB.update({cb.from_user.id: None})
-        return
+    # Clean up
+    os.remove(video_path)
+    os.remove(audio_path)
+    os.remove(output_path)
+    user_data.pop(user_id, None)
 
-    if Config.IS_PREMIUM and file_size > 4241280205:
-        await cb.message.edit(f"Video is Larger than 4GB, Can't Upload. Tell {Config.OWNER_USERNAME} to die with premium account.")
-        await delete_all(root=f"downloads/{str(cb.from_user.id)}")
-        queueDB.update({cb.from_user.id: {"videos": [], "subtitles": [], "audios": []}})
-        formatDB.update({cb.from_user.id: None})
-        return
+def merge_video_audio(video_path, audio_path, output_path, start_time):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    command = [
+        "ffmpeg",
+        "-i", video_path,
+        "-itsoffset", str(start_time),
+        "-i", audio_path,
+        "-vf", f"drawtext=text='{timestamp}':x=10:y=10:fontsize=24:fontcolor=white",
+        "-map", "0:v",
+        "-map", "1:a",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-strict", "experimental",
+        output_path
+    ]
+    subprocess.run(command)
 
-    await cb.message.edit("🎥 Extracting Video Data...")
-    duration = 1
+@flask_app.route('/status', methods=['GET'])
+def status():
+    return jsonify({"status": "Bot is running"})
 
-    try:
-        metadata = extractMetadata(createParser(merged_video_path))
-        if metadata.has("duration"):
-            duration = metadata.get("duration").seconds
-    except Exception as er:
-        await delete_all(root=f"downloads/{str(cb.from_user.id)}")
-        queueDB.update({cb.from_user.id: {"videos": [], "subtitles": [], "audios": []}})
-        formatDB.update({cb.from_user.id: None})
-        await cb.message.edit("⭕ Merged Video is corrupted")
-        return
-
-    try:
-        user = UserSettings(cb.from_user.id, cb.from_user.first_name)
-        thumb_id = user.thumbnail
-        if thumb_id is None:
-            raise Exception
-        video_thumbnail = f"downloads/{str(cb.from_user.id)}_thumb.jpg"
-        await c.download_media(message=str(thumb_id), file_name=video_thumbnail)
-    except Exception as err:
-        LOGGER.info("Generating thumbnail")
-        video_thumbnail = await take_screen_shot(merged_video_path, f"downloads/{str(cb.from_user.id)}", (duration / 2))
-
-    width, height = 1280, 720
-
-    try:
-        thumb = extractMetadata(createParser(video_thumbnail))
-        height = thumb.get("height")
-        width = thumb.get("width")
-        img = Image.open(video_thumbnail)
-        if width > height:
-            img.resize((320, height))
-        elif height > width:
-            img.resize((width, 320))
-        img.save(video_thumbnail)
-        Image.open(video_thumbnail).convert("RGB").save(video_thumbnail, "JPEG")
-    except:
+if __name__ == "__main__":
+    app.run()
