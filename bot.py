@@ -189,4 +189,4 @@ async def merge_audio(c: Client, cb: CallbackQuery):
             img.resize((width, 320))
         img.save(video_thumbnail)
         Image.open(video_thumbnail).convert("RGB").save(video_thumbnail, "JPEG")
-    except:
+     except:
