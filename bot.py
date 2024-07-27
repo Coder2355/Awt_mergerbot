@@ -28,7 +28,11 @@ user_data = {}
 
 async def download_with_progress(message, file_name, file_size, desc):
     with tqdm(total=file_size, unit="B", unit_scale=True, desc=desc) as pbar:
-        await message.download(file_name=file_name, progress=pbar.update)
+        # Correctly use the update method
+        def progress_callback(current, total):
+            pbar.update(current - pbar.n)
+        
+        await message.download(file_name=file_name, progress=progress_callback)
 
 @app.on_message(filters.video & filters.private)
 async def receive_video(client, message):
@@ -56,7 +60,16 @@ async def receive_audio(client, message):
     else:
         await message.reply_text("Audio received. Please send the video file.")
 
-@app.on_message(filters.command("video_audio") & filters.private)
+@app.on_message(filters.command("start") & filters.private)
+async def start_command(client, message):
+    await message.reply_text(
+        "Welcome to the Video and Audio Merge Bot!\n\n"
+        "1. Send a video file.\n"
+        "2. Send an audio file.\n"
+        "3. Use the /merge_video_audio command to start the merging process."
+    )
+
+@app.on_message(filters.command("merge_video_audio") & filters.private)
 async def merge_command(client, message):
     user_id = message.from_user.id
     
@@ -136,4 +149,4 @@ def status():
     return jsonify({"status": "Bot is running"})
 
 if __name__ == "__main__":
-    app.run()
+    app.run
