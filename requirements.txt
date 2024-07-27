@@ -1,10 +1,4 @@
-Flask
-aioflask
-aiofiles
 pyrogram
 tgcrypto
-gunicorn
-ffmpeg-python
-pytz
-Pillow
-hachoir
+tqdm
+flask
