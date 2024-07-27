@@ -1,12 +1,12 @@
 import ffmpeg
-import os
 
 def merge_videos(video1_path: str, video2_path: str, output_path: str):
     """
     Merge two videos into one.
     """
     try:
-        ffmpeg.input(video1_path).input(video2_path).output(output_path, vcodec='libx264', acodec='aac', strict='experimental').run()
+        # Use `concat` filter for better performance in video merging
+        ffmpeg.concat(ffmpeg.input(video1_path), ffmpeg.input(video2_path), v=1, a=0).output(output_path).run()
     except ffmpeg.Error as e:
         raise RuntimeError(f"FFmpeg error during merging videos: {e}")
 
