@@ -28,33 +28,49 @@ user_data = {}
 
 async def download_with_progress(message, file_name, file_size, desc):
     with tqdm(total=file_size, unit="B", unit_scale=True, desc=desc) as pbar:
-        return await message.download(file_name=file_name, progress=pbar.update)
+        await message.download(file_name=file_name, progress=pbar.update)
 
 @app.on_message(filters.video & filters.private)
 async def receive_video(client, message):
     video_path = VIDEO_DIR + message.video.file_name
     await message.reply_text("Downloading video...")
-
-    video_path = await download_with_progress(message, video_path, message.video.file_size, "Video Download")
-    await message.reply_text("Video received. Please send the audio file.")
     
+    await download_with_progress(message, video_path, message.video.file_size, "Video Download")
     user_data[message.from_user.id] = {"video": video_path}
+    
+    if "audio" in user_data.get(message.from_user.id, {}):
+        await message.reply_text("Both video and audio files are ready. Use the /video_audio command to start merging.")
+    else:
+        await message.reply_text("Video received. Please send the audio file.")
 
 @app.on_message(filters.audio & filters.private)
 async def receive_audio(client, message):
     audio_path = AUDIO_DIR + message.audio.file_name
     await message.reply_text("Downloading audio...")
+    
+    await download_with_progress(message, audio_path, message.audio.file_size, "Audio Download")
+    user_data[message.from_user.id]["audio"] = audio_path
+    
+    if "video" in user_data.get(message.from_user.id, {}):
+        await message.reply_text("Both video and audio files are ready. Use the /video_audio command to start merging.")
+    else:
+        await message.reply_text("Audio received. Please send the video file.")
 
-    audio_path = await download_with_progress(message, audio_path, message.audio.file_size, "Audio Download")
-    await message.reply_text("Audio received. Please select the start time for the audio in the video.",
+@app.on_message(filters.command("video_audio") & filters.private)
+async def merge_command(client, message):
+    user_id = message.from_user.id
+    
+    if user_id not in user_data or "video" not in user_data[user_id] or "audio" not in user_data[user_id]:
+        await message.reply_text("You need to send both a video and an audio file before using this command.")
+        return
+    
+    await message.reply_text("Please select the start time for the audio in the video.",
                              reply_markup=InlineKeyboardMarkup([
                                  [InlineKeyboardButton("Start at 0:00", callback_data="start_0")],
                                  [InlineKeyboardButton("Start at 0:30", callback_data="start_30")],
                                  [InlineKeyboardButton("Start at 1:00", callback_data="start_60")],
                                  [InlineKeyboardButton("Start at 1:30", callback_data="start_90")]
                              ]))
-
-    user_data[message.from_user.id].update({"audio": audio_path})
 
 @app.on_callback_query()
 async def handle_callback_query(client, callback_query: CallbackQuery):
@@ -71,19 +87,22 @@ async def handle_callback_query(client, callback_query: CallbackQuery):
     
     await callback_query.message.edit_text("Merging video and audio...")
 
-    merge_video_audio(video_path, audio_path, output_path, start_time)
+    # Run FFmpeg command and check for errors
+    merge_result = merge_video_audio(video_path, audio_path, output_path, start_time)
     
-    await callback_query.message.edit_text("Uploading merged video...")
+    if merge_result:
+        await callback_query.message.edit_text("Uploading merged video...")
+        with tqdm(total=os.path.getsize(output_path), unit="B", unit_scale=True, desc="Video Upload") as pbar:
+            await client.send_video(callback_query.message.chat.id, video=output_path, caption="Here is your merged file.",
+                                    progress=pbar.update)
 
-    with tqdm(total=os.path.getsize(output_path), unit="B", unit_scale=True, desc="Video Upload") as pbar:
-        await client.send_video(callback_query.message.chat.id, video=output_path, caption="Here is your merged file.",
-                                progress=pbar.update)
-
-    # Clean up
-    os.remove(video_path)
-    os.remove(audio_path)
-    os.remove(output_path)
-    user_data.pop(user_id, None)
+        # Clean up
+        os.remove(video_path)
+        os.remove(audio_path)
+        os.remove(output_path)
+        user_data.pop(user_id, None)
+    else:
+        await callback_query.message.edit_text("Error merging video and audio.")
 
 def merge_video_audio(video_path, audio_path, output_path, start_time):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
@@ -100,7 +119,17 @@ def merge_video_audio(video_path, audio_path, output_path, start_time):
         "-strict", "experimental",
         output_path
     ]
-    subprocess.run(command)
+    
+    try:
+        result = subprocess.run(command, check=True, capture_output=True)
+        if result.returncode == 0:
+            return True
+        else:
+            print("FFmpeg Error:", result.stderr.decode())
+            return False
+    except subprocess.CalledProcessError as e:
+        print("FFmpeg Error:", e.stderr.decode())
+        return False
 
 @flask_app.route('/status', methods=['GET'])
 def status():
